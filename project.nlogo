@@ -1,6 +1,6 @@
-turtles-own [final-goal goal-list visited in-building count-down ]
+turtles-own [final-goal next-building goal-list visited in-building count-down nearest]
 
-globals [buildings]
+globals [buildings crowd-avg total-buildings]
 
 ;;Simulation setup
 to setup
@@ -18,6 +18,7 @@ to setup
 
   ]
 
+  set total-buildings length buildings
   turtle-creator
 end
 
@@ -31,113 +32,58 @@ end
 to turtle-creator
   create-turtles num-of-walkers   ;; create 100 turtles with random headings
   ask turtles
-    [ set color blue    ;; turn them blue
+    [
+      set color blue    ;; turn them blue
       set shape "default"
       set size 2
 
       ;; spread them around
-      set xcor 15;(random (100) - 50) mod 15
-      set ycor 15;(random (100) - 50) mod 15
+      set xcor (random (100) - 50)
+      set ycor (random (100) - 50)
       set goal-list shuffle buildings
       let num_of_goals random (25) + 5 ;; min 5 buildings, max 30 buildings
-      show num_of_goals
-      set goal-list sublist goal-list 1 num_of_goals ;; get first num_of_goals random building from total goals
+
+      set goal-list sublist goal-list 1 num_of_goals ;; get first num_of_goals random buildings from total goals
       set visited (list)
-      let nearest-patch min-one-of goal-list [ distance myself ] ;; first goal is the nearest patch
-      set final-goal nearest-patch
-      set count-down (random (max-visit-time - min-visit-time) + min-visit-time) ;; set first visit time
+
+
+      ; Set first goal as nearest between possible goals
+      set final-goal min-one-of patches with [ member? self [goal-list] of myself] [ distance myself ]
+      set next-building min-one-of patches with [ pcolor = orange ] [ distance myself ]
+
+      set count-down (random (max-visit-time - min-visit-time) + min-visit-time) ;; set visit time
       set in-building false
     ]
 end
 
 ;;To Go function
 to go
+  set crowd-avg 0
   move-walkers
   ask turtles[
     if count-down >= 1 and in-building = true ;; with count-down >= 1 i'm avoiding negative numbers and infinite loops
     [set count-down count-down - 1]
   ]
+
+  ;; resetting colors of radar
+  ask patches with [ pcolor != orange ]
+  [ set pcolor white ]
+
+  ask patches with [ pcolor = orange ] [
+    ;; create a circle proportional to how many turtles are on this building
+    ;; for visual feedback of traffic
+    if count turtles-on self > 0 [
+      let crowd (0.04 * count turtles-on self)
+      ask patches with [ pcolor != orange ] in-radius count turtles-on self
+      [
+        set pcolor (19 - crowd)
+      ]
+    ]
+    set crowd-avg crowd-avg + (count turtles-on self / total-buildings)
+  ]
+
+  if not any? turtles [ stop ] ;; exits if there are no more turtles
   tick
-  if not any? turtles [ stop ]
-  ;; exits if there are no more turtles
-end
-
-;; Pick next goal if left or die
-to pick_next_goal_or_die
-  let goals-left filter [ [?1] -> not member? ?1 visited ] goal-list ;;Otherwise just pick the next building to visit
-  ifelse not empty? goals-left [
-
-    ;; for each remaining goal, choose one that is less busy than other
-    let sorted-goals-left sort-by [ [building1 building2] -> count turtles-on building1 < count turtles-on building2] goals-left
-
-    ;; Here I want to take less busy with min distance. I have to define a function to achieve this
-    ;; set goal first sorted-goals-left
-    ;; show "Take less busy building"
-
-
-    set final-goal first sorted-goals-left ;; face a random goal left and continue searching for better solution
-    fd 1
-    ;;show "Continue searching"
-
-    ;; foreach sorted-goals-left [ [x] -> show (word x "->" count turtles-on x) ]
-  ]
-  [
-    die
-  ]
-end
-
-to pick_goal
-  ;; This is my final goal
-  let goals-left filter [ [?1] -> not member? ?1 visited ] goal-list ;;Otherwise just pick the next building to visit
-  set final-goal first goals-left
-end
-
-to-report in-range? [value low high]
-  report value >= low and value <= high
-end
-
-to-report choose_direction_to_move
-  ;; i am on a building, check my neighbours' crowding in order to take one direction
-  let direction 0
-  let neighbors-patches[]
-
-  ask patches with [in-range? distance myself 15 15 and pcolor = orange] [ set pcolor black ]
-  set neighbors-patches patches with [ pcolor = black ]
-  ask patches with [in-range? distance myself 15 15 and pcolor = black] [ set pcolor orange ]
-
-
-  let sorted-patches sort-on [count turtles-on self] neighbors-patches
-  ;let sorted-patches sort-on [ [ distance self ] of goal ] neighbors-patches
-  ;let sorted-patches sort-by [ [?1 ?2] -> (distance goal) < (distance goal) ] neighbors-patches
-  if not empty? sorted-patches[
-    ;show goal
-    ;show sublist sorted-patches 1 length sorted-patches
-    ;show first sorted-patches
-    let chosen-neighbour first sorted-patches
-    let x-diff 0
-    let y-diff 0
-    set x-diff (xcor - [pxcor] of chosen-neighbour) ^ 2
-    set y-diff (ycor - [pycor] of chosen-neighbour) ^ 2
-
-    show "x-y"
-    show x-diff
-    show y-diff
-    show "end"
-    if x-diff = 0 and y-diff > 0[
-      set direction 0
-    ]
-    if x-diff > 0 and y-diff = 0[
-      set direction 90
-    ]
-    if x-diff = 0 and y-diff < 0[
-      set direction 180
-    ]
-    if x-diff < 0 and y-diff = 0[
-      set direction 270
-    ]
-  ]
-
-  report direction
 end
 
 ;;Moving the turtles
@@ -148,26 +94,37 @@ to move-walkers
     ]
     [
       ifelse patch-here = final-goal and count-down = 0 [
+        ;; Exit from the building
+
         set color blue
+        ;; set next visit time
         set count-down (random (max-visit-time - min-visit-time) + min-visit-time)
         set in-building false
+        ;; put goal in already visited ones
         set visited lput final-goal visited
-        ;;pick_next_goal_or_die
-        pick_goal
+        ;; get new final goal
+        pick_new_final_goal
       ]
       [
         ifelse patch-here = final-goal and count-down > 0 [
           set in-building true
           set color red ;; if in building turn red
-          set final-goal 0
         ]
         [
-          ifelse final-goal != 0[
-            walk-towards-goal ;;Move turtle
+          ifelse patch-here != final-goal [
+            ifelse member? patch-here buildings [
+              ;; I am on a building but not on final goal
+              ;; choose next objective and move turtle
+              walk-towards-goal
+            ]
+            [
+              ;; I'm not on a building. keep moving
+              walk-to-next-building ;;Move turtle
+            ]
           ]
           [
-            ;;pick_next_goal_or_die
-            pick_goal
+            ;; choose next final goal
+            pick_new_final_goal
           ]
         ]
       ]
@@ -175,81 +132,153 @@ to move-walkers
   ]
 end
 
-;;Move turtles towards the goal
-to walk-towards-goal
-  ;  let turtle_cor[] = list xcor ycor
-  ;  let goal_cor[] = [list pxcor pycor] of goal
-  ;  let neighbors_patches[]
-  ;  set neighbors_patches min-n-of 4 patches with [ pcolor = orange ] [ distance myself ]
-  ;  set neighbors_patches sort-by [ [building1 building2] -> count turtles-on building1 < count turtles-on building2] neighbors_patches
-  ;  let road_to_goal first neighbors_patches
-  ;;ask road_to_goal [ set pcolor blue ]
-
-  ask final-goal [set pcolor yellow]
-  ;ifelse check-neighbours-crowding[
-  ; Try to look into neighbours and choose less crowded
-  ifelse check-neighbours-crowding [
-    ; get 4 neighbours coordinates
-
-    let direction choose_direction_to_move
-    show direction
-    set heading direction ;;0 = N 90 = E 180 = S 270 = W
-    fd 1
-
-    ;    let neighbors_patches[]
-    ;    set neighbors_patches min-n-of 4 patches with [ pcolor = orange ] [ distance myself ]
-    ;
-    ;    ask neighbors_patches [set pcolor black]
-
-
-    ;    let north-x xcor
-    ;    let north-y (ycor + 15)
-    ;    let east-x (xcor + 15)
-    ;    let east-y ycor
-    ;    let south-x xcor
-    ;    let south-y (ycor - 15)
-    ;    let west-x (xcor - 15)
-    ;    let west-y ycor
-    ;
-    ;    let possible_directions[]
-    ;    show goal
-    ;    if (([pxcor] of goal - north-x) ^ 2 <= ([pxcor] of goal - xcor) ^ 2) or (([pycor] of goal - north-y) ^ 2 <= ([pycor] of goal - ycor) ^ 2) [
-    ;      show "NORTH is possible"
-    ;    ]
-    ;    if (([pxcor] of goal - east-x) ^ 2 <= ([pxcor] of goal - xcor) ^ 2) or (([pycor] of goal - east-y) ^ 2 <= ([pycor] of goal - ycor) ^ 2) [
-    ;      show "east is possible"
-    ;    ]
-    ;    if (([pxcor] of goal - south-x) ^ 2 <= ([pxcor] of goal - xcor) ^ 2) or (([pycor] of goal - south-y) ^ 2 <= ([pycor] of goal - ycor) ^ 2) [
-    ;      show "south is possible"
-    ;    ]
-    ;    if (([pxcor] of goal - west-x) ^ 2 <= ([pxcor] of goal - xcor) ^ 2) or (([pycor] of goal - north-y) ^ 2 <= ([pycor] of goal - ycor) ^ 2) [
-    ;      show "west is possible"
-    ;    ]
-
+to pick_new_final_goal
+  ;; CHoose final goal between left goals
+  let goals-left filter [ [?1] -> not member? ?1 visited ] goal-list
+  ifelse empty? goals-left[
+    die
   ]
   [
-    ;else facing goal matrix-like
-    ifelse xcor < [pxcor] of final-goal [
-      set heading 90 ;;0 = N 90 = E 180 = S 270 = W
-      fd 1
+    set final-goal first goals-left
+  ]
+end
+
+
+to-report in-range? [value low high]
+  report value >= low and value <= high
+end
+
+to walk-towards-goal
+  ;;Choose a goal and move turtles towards it
+
+  let neighbors-patches[]
+
+  ; get neighbours that are orange and at distance 15
+  set neighbors-patches patches with [in-range? distance myself 1 15 and pcolor = orange]
+
+  ifelse member? final-goal neighbors-patches [
+    ; final goal è tra i miei vicini -> vado li
+    set next-building final-goal
+  ][
+    ifelse check-neighbours-crowding [
+      let less-crowded-nearest-patch nobody
+      ; else cerco i miei vicini a meno distanza da final-goal
+      ifelse count neighbors-patches > 1 [
+        let nearest-patches min-n-of 2 neighbors-patches [ distance [final-goal] of myself ] ;; first goal is the nearest patch
+        let sorted-on-crowded sort-by [ [?1 ?2] -> count turtles-on ?1 < count turtles-on ?2 ] nearest-patches
+        set less-crowded-nearest-patch first sorted-on-crowded
+      ]
+      [
+        let nearest-patches min-one-of neighbors-patches [ distance [final-goal] of myself ] ;; first goal is the nearest patch
+        set less-crowded-nearest-patch nearest-patches
+      ]
+
+      if less-crowded-nearest-patch != nobody [
+        set next-building less-crowded-nearest-patch
+      ]
     ][
-      ifelse xcor > [pxcor] of final-goal [
-        set heading 270 ;;0 = N 90 = E 180 = S 270 = W
-        fd 1
-      ][
-        ifelse ycor < [pycor] of final-goal [
-          set heading 0 ;;0 = N 90 = E 180 = S 270 = W
-          fd 1
-        ][
-          if ycor > [pycor] of final-goal [
-            set heading 180 ;;0 = N 90 = E 180 = S 270 = W
-            fd 1
-          ]
-        ]
+      let nearest-patch min-one-of neighbors-patches [ distance [final-goal] of myself ]
+      set next-building nearest-patch
+    ]
+
+  ]
+
+  if next-building = 0[
+    set next-building min-one-of patches with [ pcolor = orange ] [ distance myself ]
+  ]
+  walk-to-next-building
+end
+
+to walk-to-next-building
+  ;; Walk to a building matrix-style
+
+  ifelse xcor < [pxcor] of ([next-building] of self) [
+    set heading 90 ;; 90 = E
+  ]
+  [
+    ifelse xcor > [pxcor] of ([next-building] of self) [
+      set heading 270 ;; 270 = W
+    ]
+    [
+      ifelse ycor < [pycor] of ([next-building] of self) [
+        set heading 0 ;;0 = N
+      ]
+      [
+        set heading 180 ;; 180 = S
       ]
     ]
   ]
+
+  fd 1
 end
+
+;; Pick next goal if left or die
+;to pick_next_goal_or_die
+;  let goals-left filter [ [?1] -> not member? ?1 visited ] goal-list ;;Otherwise just pick the next building to visit
+;  ifelse not empty? goals-left [
+;
+;    ;; for each remaining goal, choose one that is less busy than other
+;    let sorted-goals-left sort-by [ [building1 building2] -> count turtles-on building1 < count turtles-on building2] goals-left
+;
+;    ;; Here I want to take less busy with min distance. I have to define a function to achieve this
+;    ;; set goal first sorted-goals-left
+;    ;; show "Take less busy building"
+;
+;
+;    set final-goal first sorted-goals-left ;; face a random goal left and continue searching for better solution
+;    fd 1
+;    ;;show "Continue searching"
+;
+;    ;; foreach sorted-goals-left [ [x] -> show (word x "->" count turtles-on x) ]
+;  ]
+;  [
+;    die
+;  ]
+;end
+
+;to-report choose_direction_to_move
+;  ;; i am on a building, check my neighbours' crowding in order to take one direction
+;  let direction 0
+;  let neighbors-patches[]
+;
+;  ask patches with [in-range? distance myself 15 15 and pcolor = orange] [ set pcolor black ]
+;  set neighbors-patches patches with [ pcolor = black ]
+;  ask patches with [in-range? distance myself 15 15 and pcolor = black] [ set pcolor orange ]
+;
+;
+;  let sorted-patches sort-on [count turtles-on self] neighbors-patches
+;  ;let sorted-patches sort-on [ [ distance self ] of goal ] neighbors-patches
+;  ;let sorted-patches sort-by [ [?1 ?2] -> (distance goal) < (distance goal) ] neighbors-patches
+;  if not empty? sorted-patches[
+;    ;show goal
+;    ;show sublist sorted-patches 1 length sorted-patches
+;    ;show first sorted-patches
+;    let chosen-neighbour first sorted-patches
+;    let x-diff 0
+;    let y-diff 0
+;    set x-diff (xcor - [pxcor] of chosen-neighbour) ^ 2
+;    set y-diff (ycor - [pycor] of chosen-neighbour) ^ 2
+;
+;    show "x-y"
+;    show x-diff
+;    show y-diff
+;    show "end"
+;    if x-diff = 0 and y-diff > 0[
+;      set direction 0
+;    ]
+;    if x-diff > 0 and y-diff = 0[
+;      set direction 90
+;    ]
+;    if x-diff = 0 and y-diff < 0[
+;      set direction 180
+;    ]
+;    if x-diff < 0 and y-diff = 0[
+;      set direction 270
+;    ]
+;  ]
+;
+;  report direction
+;end
 @#$#@#$#@
 GRAPHICS-WINDOW
 720
@@ -321,7 +350,7 @@ num-of-walkers
 num-of-walkers
 1
 100
-1.0
+100.0
 1
 1
 NIL
@@ -336,7 +365,7 @@ min-visit-time
 min-visit-time
 10
 30
-30.0
+24.0
 1
 1
 NIL
@@ -351,7 +380,7 @@ max-visit-time
 max-visit-time
 50
 100
-85.0
+84.0
 1
 1
 NIL
@@ -361,14 +390,14 @@ PLOT
 1392
 11
 1860
-678
+322
 Hot spots
 Time
 Turtles
 0.0
-500.0
+20.0
 0.0
-100.0
+20.0
 true
 true
 "" ""
@@ -383,9 +412,38 @@ SWITCH
 56
 check-neighbours-crowding
 check-neighbours-crowding
-0
+1
 1
 -1000
+
+MONITOR
+558
+10
+698
+71
+Average crowd
+crowd-avg
+10
+1
+15
+
+PLOT
+1393
+334
+1862
+497
+Crowd average
+Time
+Average crowd
+0.0
+1.0
+0.0
+1.0
+true
+false
+"" ""
+PENS
+"default" 1.0 0 -16777216 true "" "plot crowd-avg"
 
 @#$#@#$#@
 ## WHAT IS IT?
